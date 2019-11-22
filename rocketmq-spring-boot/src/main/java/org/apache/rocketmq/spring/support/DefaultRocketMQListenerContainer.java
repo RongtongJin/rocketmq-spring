@@ -17,12 +17,13 @@
 
 package org.apache.rocketmq.spring.support;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.nio.charset.Charset;
 import java.util.List;
 import java.util.Objects;
-
+import javax.annotation.Resource;
 import org.apache.rocketmq.client.AccessChannel;
 import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
 import org.apache.rocketmq.client.consumer.MessageSelector;
@@ -34,6 +35,8 @@ import org.apache.rocketmq.client.consumer.listener.MessageListenerConcurrently;
 import org.apache.rocketmq.client.consumer.listener.MessageListenerOrderly;
 import org.apache.rocketmq.client.consumer.rebalance.AllocateMessageQueueAveragely;
 import org.apache.rocketmq.client.exception.MQClientException;
+import org.apache.rocketmq.common.MixAll;
+import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.remoting.RPCHook;
 import org.apache.rocketmq.spring.annotation.ConsumeMode;
@@ -42,6 +45,8 @@ import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.annotation.SelectorType;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.apache.rocketmq.spring.core.RocketMQPushConsumerLifecycleListener;
+import org.apache.rocketmq.spring.core.RocketMQReplyListener;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.framework.AopProxyUtils;
@@ -50,11 +55,10 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.messaging.Message;
 import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.util.Assert;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 @SuppressWarnings("WeakerAccess")
 public class DefaultRocketMQListenerContainer implements InitializingBean,
@@ -95,6 +99,8 @@ public class DefaultRocketMQListenerContainer implements InitializingBean,
 
     private RocketMQListener rocketMQListener;
 
+    private RocketMQReplyListener rocketMQReplyListener;
+
     private RocketMQMessageListener rocketMQMessageListener;
 
     private DefaultMQPushConsumer consumer;
@@ -102,6 +108,9 @@ public class DefaultRocketMQListenerContainer implements InitializingBean,
     private Class messageType;
 
     private boolean running;
+
+    @Resource
+    private RocketMQTemplate rocketMQTemplate;
 
     // The following properties came from @RocketMQMessageListener.
     private ConsumeMode consumeMode;
@@ -195,6 +204,10 @@ public class DefaultRocketMQListenerContainer implements InitializingBean,
 
     public void setRocketMQListener(RocketMQListener rocketMQListener) {
         this.rocketMQListener = rocketMQListener;
+    }
+
+    public void setReplyRocketMQListener(RocketMQReplyListener rocketMQReplyListener) {
+        this.rocketMQReplyListener = rocketMQReplyListener;
     }
 
     public RocketMQMessageListener getRocketMQMessageListener() {
@@ -361,6 +374,33 @@ public class DefaultRocketMQListenerContainer implements InitializingBean,
         }
     }
 
+    public class ReplyMessageListener implements MessageListenerConcurrently {
+
+        @SuppressWarnings("unchecked")
+        @Override
+        public ConsumeConcurrentlyStatus consumeMessage(List<MessageExt> msgs, ConsumeConcurrentlyContext context) {
+            for (MessageExt messageExt : msgs) {
+                log.debug("received msg: {}", messageExt);
+                try {
+                    long now = System.currentTimeMillis();
+                    Message message = rocketMQReplyListener.onMessage(doConvertMessage(messageExt));
+                    long costTime = System.currentTimeMillis() - now;
+                    RocketMQUtil.convertReplyMessage(messageExt, message);
+                    String cluster = messageExt.getProperty(MessageConst.PROPERTY_CLUSTER);
+                    String replyTopic = MixAll.getReplyTopic(cluster);
+                    rocketMQTemplate.send(replyTopic, message);
+                    log.debug("consume {} cost: {} ms", messageExt.getMsgId(), costTime);
+                } catch (Exception e) {
+                    log.warn("consume message failed. messageExt:{}", messageExt, e);
+                    context.setDelayLevelWhenNextConsume(delayLevelWhenNextConsume);
+                    return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+                }
+            }
+
+            return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+        }
+    }
+
     public class DefaultMessageListenerOrderly implements MessageListenerOrderly {
 
         @SuppressWarnings("unchecked")
@@ -493,19 +533,25 @@ public class DefaultRocketMQListenerContainer implements InitializingBean,
                 throw new IllegalArgumentException("Property 'selectorType' was wrong.");
         }
 
-        switch (consumeMode) {
-            case ORDERLY:
-                consumer.setMessageListener(new DefaultMessageListenerOrderly());
-                break;
-            case CONCURRENTLY:
-                consumer.setMessageListener(new DefaultMessageListenerConcurrently());
-                break;
-            default:
-                throw new IllegalArgumentException("Property 'consumeMode' was wrong.");
-        }
-
-        if (rocketMQListener instanceof RocketMQPushConsumerLifecycleListener) {
-            ((RocketMQPushConsumerLifecycleListener) rocketMQListener).prepareStart(consumer);
+        if (rocketMQReplyListener != null) {
+            consumer.setMessageListener(new ReplyMessageListener());
+            if (rocketMQReplyListener instanceof RocketMQPushConsumerLifecycleListener) {
+                ((RocketMQPushConsumerLifecycleListener) rocketMQReplyListener).prepareStart(consumer);
+            }
+        } else if (rocketMQListener != null) {
+            switch (consumeMode) {
+                case ORDERLY:
+                    consumer.setMessageListener(new DefaultMessageListenerOrderly());
+                    break;
+                case CONCURRENTLY:
+                    consumer.setMessageListener(new DefaultMessageListenerConcurrently());
+                    break;
+                default:
+                    throw new IllegalArgumentException("Property 'consumeMode' was wrong.");
+            }
+            if (rocketMQListener instanceof RocketMQPushConsumerLifecycleListener) {
+                ((RocketMQPushConsumerLifecycleListener) rocketMQListener).prepareStart(consumer);
+            }
         }
 
     }

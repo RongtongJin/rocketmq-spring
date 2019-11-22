@@ -31,4 +31,8 @@ public class RocketMQHeaders {
     public static final String QUEUE_ID = "QUEUE_ID";
     public static final String SYS_FLAG = "SYS_FLAG";
     public static final String TRANSACTION_ID = "TRANSACTION_ID";
+    public static final String CORRELATION_ID = "CORRELATION_ID";
+    public static final String MESSAGE_REPLY_TO_CLIENT = "REPLY_TO_CLIENT";
+    public static final String MESSAGE_TTL = "TTL";
+    public static final String MESSAGE_TYPE = "MSG_TYPE";
 }

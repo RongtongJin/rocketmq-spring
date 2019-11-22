@@ -27,6 +27,7 @@ import org.apache.rocketmq.spring.annotation.ConsumeMode;
 import org.apache.rocketmq.spring.annotation.MessageModel;
 import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
+import org.apache.rocketmq.spring.core.RocketMQReplyListener;
 import org.apache.rocketmq.spring.support.DefaultRocketMQListenerContainer;
 import org.apache.rocketmq.spring.support.RocketMQMessageConverter;
 import org.slf4j.Logger;
@@ -147,7 +148,13 @@ public class ListenerContainerConfiguration implements ApplicationContextAware, 
         }
         container.setConsumerGroup(environment.resolvePlaceholders(annotation.consumerGroup()));
         container.setRocketMQMessageListener(annotation);
-        container.setRocketMQListener((RocketMQListener)bean);
+        if(bean instanceof RocketMQListener){
+            container.setRocketMQListener((RocketMQListener)bean);
+        } else {
+            container.setReplyRocketMQListener((RocketMQReplyListener)bean);
+        }
+
+
         container.setObjectMapper(objectMapper);
         container.setMessageConverter(rocketMQMessageConverter.getMessageConverter());
         container.setName(name);  // REVIEW ME, use the same clientId or multiple?

@@ -17,6 +17,9 @@
 package org.apache.rocketmq.spring.support;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.Charset;
+import java.util.Map;
+import java.util.Objects;
 import org.apache.rocketmq.acl.common.AclClientRPCHook;
 import org.apache.rocketmq.acl.common.SessionCredentials;
 import org.apache.rocketmq.client.exception.MQClientException;
@@ -38,10 +41,6 @@ import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
-
-import java.nio.charset.Charset;
-import java.util.Map;
-import java.util.Objects;
 
 public class RocketMQUtil {
     private final static Logger log = LoggerFactory.getLogger(RocketMQUtil.class);
@@ -253,5 +252,15 @@ public class RocketMQUtil {
             .append(separator).append(identify)
             .append(separator).append(UtilAll.getPid());
         return instanceName.toString();
+    }
+
+    public static void convertReplyMessage(MessageExt messageExt, org.springframework.messaging.Message<?> message) {
+        String replyTo = messageExt.getProperty(MessageConst.PROPERTY_MESSAGE_REPLY_TO_CLIENT);
+        String correlationId = messageExt.getProperty(MessageConst.PROPERTY_CORRELATION_ID);
+        String ttl = messageExt.getProperty(MessageConst.PROPERTY_MESSAGE_TTL);
+        message.getHeaders().put(RocketMQHeaders.MESSAGE_TYPE, "reply");
+        message.getHeaders().put(RocketMQHeaders.CORRELATION_ID, correlationId);
+        message.getHeaders().put(RocketMQHeaders.MESSAGE_REPLY_TO_CLIENT, replyTo);
+        message.getHeaders().put(RocketMQHeaders.MESSAGE_TTL, ttl);
     }
 }

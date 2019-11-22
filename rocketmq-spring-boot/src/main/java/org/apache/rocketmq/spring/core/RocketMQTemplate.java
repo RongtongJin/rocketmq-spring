@@ -17,13 +17,13 @@
 
 package org.apache.rocketmq.spring.core;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-
 import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.client.producer.MessageQueueSelector;
@@ -47,8 +47,6 @@ import org.springframework.messaging.core.MessagePostProcessor;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.util.Assert;
 import org.springframework.util.MimeTypeUtils;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 @SuppressWarnings({"WeakerAccess", "unused"})
 public class RocketMQTemplate extends AbstractMessageSendingTemplate<String> implements InitializingBean, DisposableBean {
@@ -499,6 +497,68 @@ public class RocketMQTemplate extends AbstractMessageSendingTemplate<String> imp
     public void sendOneWayOrderly(String destination, Object payload, String hashKey) {
         Message<?> message = MessageBuilder.withPayload(payload).build();
         sendOneWayOrderly(destination, message, hashKey);
+    }
+
+    /**
+     *
+     * @param destination formats: `topicName:tags`
+     * @param payload the Object to use as payload
+     * @return reply message
+     */
+    public Message<?> sendAndReceive(String destination, Object payload) {
+        return sendAndReceive(destination, payload, producer.getSendMsgTimeout());
+    }
+
+    /**
+     * Send message and wait for reply
+     *
+     * @param destination formats: `topicName:tags`
+     * @param payload the Object to use as payload
+     * @param timeout wait timeout with millis
+     * @return reply message
+     */
+    public Message<?> sendAndReceive(String destination, Object payload, long timeout) {
+        Message<?> message = MessageBuilder.withPayload(payload).build();
+        return sendAndReceive(destination, message, timeout);
+    }
+
+    /**
+     * Send message and wait for reply
+     *
+     * @param destination formats: `topicName:tags`
+     * @param message {@link org.springframework.messaging.Message}
+     * @return reply message
+     */
+    public Message<?> sendAndReceive(String destination, Message<?> message) {
+        return sendAndReceive(destination, message, producer.getSendMsgTimeout());
+    }
+
+    /**
+     * Send message and wait for reply
+     *
+     * @param destination formats: `topicName:tags`
+     * @param message {@link org.springframework.messaging.Message}
+     * @param timeout wait timeout with millis
+     * @return reply message
+     */
+    public Message<?> sendAndReceive(String destination, Message<?> message, long timeout) {
+        if (Objects.isNull(message) || Objects.isNull(message.getPayload())) {
+            log.error("syncSend failed. destination:{}, message is null ", destination);
+            throw new IllegalArgumentException("`message` and `message.payload` cannot be null");
+        }
+        try {
+            long now = System.currentTimeMillis();
+            org.apache.rocketmq.common.message.Message sendMsg = this.createRocketMqMessage(destination, message);
+            org.apache.rocketmq.common.message.Message replyMsg = producer.request(sendMsg, timeout);
+            long costTime = System.currentTimeMillis() - now;
+            if (log.isDebugEnabled()) {
+                log.debug("send message cost: {} ms", costTime);
+            }
+            return RocketMQUtil.convertToSpringMessage(replyMsg);
+        } catch (Exception e) {
+            log.error("syncSend failed. destination:{}, message:{} ", destination, message);
+            throw new MessagingException(e.getMessage(), e);
+        }
     }
 
     @Override
